@@ -1,0 +1,43 @@
+# Full-collection selectivity verification is mandatory before export.
+database: citibike
+collection: rides2023
+uri: mongodb://127.0.0.1:27018/?serverSelectionTimeoutMS=5000
+num_patterns: 20
+instances_per_pattern: 50
+min_selectivity: 1e-7
+max_selectivity: 0.05
+seed: 42
+schema_limit: 1000000
+estimator_sample_size: 100000
+screening_margin: 0.0005
+max_candidate_attempts: 100000
+max_instance_attempts: 1000
+generation_timeout_secs: 600
+verify_workers: 4
+count_max_time_ms: 700000
+diversity:
+  enabled: true
+  max_attribute_fields: 1
+  max_attribute_pattern_fraction: 0.5
+generation:
+  min_predicates: 2
+  max_predicates: 8
+  exclude_fields:
+  - _id
+  - ride_id
+  sort_probability: 0.5
+  sort_on_filter_field_ratio: 0.5
+  sort_two_field_ratio: 0.3
+  sort_ascending_ratio: 0.8
+  skip_probability: 0.0
+  skip_min: 0
+  skip_max: 20
+  skip_requires_limit: true
+  limit_probability: 0.5
+  limit_min: 5
+  limit_max: 100
+  projection_probability: 0.5
+  projection_filter_overlap_ratio: 0.5
+  projection_min_fields: 1
+  projection_max_fields: 5
+  projection_exclude_id_ratio: 0.5
