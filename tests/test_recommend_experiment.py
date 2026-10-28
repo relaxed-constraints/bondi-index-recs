@@ -6,6 +6,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import Mock, MagicMock, patch
 
+from bondi.execution import ExecutionResult
 from experiments import recommend
 from pymongo.errors import OperationFailure
 
@@ -207,14 +208,14 @@ class RecommendTests(unittest.TestCase):
         dep = Mock(status="completed", script_path=Path("workload.py"))
         dep.load_artifact.side_effect = self.artifact_loader(manifest, raw)
         with patch.object(recommend.yanex, "get_dependencies", return_value={"x": dep}):
-            _, _, queries = recommend.load_workload()
-        self.assertIsInstance(queries[0], MongoFindQuery)
-        self.assertEqual(queries[0].filter, row["filter"])
+            _, _, workload = recommend.load_workload()
+        self.assertIsInstance(workload[0].query, MongoFindQuery)
+        self.assertEqual(workload[0].query.filter, row["filter"])
         client = MagicMock()
         coll = client["yelp"]["business"]
         coll.count_documents.return_value = 10
         executor = Mock()
-        executor.run.return_value = Mock(row_count=2, elapsed_ms=250)
+        executor.run_workload.return_value = [ExecutionResult(row_count=2, elapsed_ms=250)]
         with (
             patch.object(
                 recommend,
@@ -231,17 +232,30 @@ class RecommendTests(unittest.TestCase):
             result = recommend.replay(
                 client,
                 manifest,
-                queries,
+                workload,
                 {"query_timeout_ms": 100, "batch_size": 10, "workload_repetitions": 1},
                 executor=executor,
             )
-        executor.run.assert_called_once_with(
-            queries[0],
-            query_kwargs={"max_time_ms": 100, "batch_size": 10, "comment": "yanex:test:0:0"},
+        executor.run_workload.assert_called_once()
+        call = executor.run_workload.call_args
+        self.assertIs(call.args[0], workload)
+        self.assertEqual(workload[0].pattern_id, 0)
+        self.assertEqual(
+            call.kwargs["query_kwargs"],
+            {"max_time_ms": 100, "batch_size": 10, "comment": "yanex:test:0"},
         )
         coll.find.assert_not_called()
         save.assert_called_once_with(
-            [{"repetition": 0, "query_id": 0, "returned_documents": 2, "seconds": 0.25}],
+            [
+                {
+                    "repetition": 0,
+                    "query_id": 0,
+                    "returned_documents": 2,
+                    "seconds": 0.25,
+                    "status": "success",
+                    "error": None,
+                }
+            ],
             "replay.jsonl",
         )
         self.assertEqual(result["completed_queries"], 1)
@@ -249,6 +263,7 @@ class RecommendTests(unittest.TestCase):
 
     def test_executor_failure_keeps_partial_observations_and_restores_capture(self):
         from contextlib import contextmanager
+        from bondi.workload import Workload, WorkloadEntry
         from bondi.mongodb import MongoCollectionRef, MongoFindQuery
 
         restored = []
@@ -263,7 +278,11 @@ class RecommendTests(unittest.TestCase):
         client = MagicMock()
         client["yelp"]["business"].count_documents.return_value = 10
         executor = Mock()
-        executor.run.side_effect = [Mock(row_count=2, elapsed_ms=100), RuntimeError("failed")]
+        executor.run_workload.return_value = [
+            ExecutionResult(row_count=2, elapsed_ms=100),
+            ExecutionResult(elapsed_ms=200, error=TimeoutError("failed")),
+            ExecutionResult(row_count=3, elapsed_ms=300),
+        ]
         query = MongoFindQuery(MongoCollectionRef("yelp", "business"), {})
         with (
             patch.object(recommend, "capture_threshold", capture),
@@ -276,17 +295,65 @@ class RecommendTests(unittest.TestCase):
                 recommend.replay(
                     client,
                     {"namespace": "yelp.business", "population": 10},
-                    [query, query, query],
+                    Workload([WorkloadEntry(query) for _ in range(3)]),
                     {"query_timeout_ms": 100, "batch_size": 10, "workload_repetitions": 1},
                     executor=executor,
                 )
         self.assertEqual(restored, [True])
-        self.assertEqual(executor.run.call_count, 2)
-        self.assertEqual(executor.run.call_args.kwargs["query_kwargs"]["comment"], "yanex:test:0:1")
-        save.assert_called_once_with(
-            [{"repetition": 0, "query_id": 0, "returned_documents": 2, "seconds": 0.1}],
-            "replay.jsonl",
-        )
+        executor.run_workload.assert_called_once()
+        rows, filename = save.call_args.args
+        self.assertEqual(filename, "replay.jsonl")
+        self.assertEqual([row["query_id"] for row in rows], [0, 1, 2])
+        self.assertEqual([row["status"] for row in rows], ["success", "timeout", "success"])
+        self.assertEqual(rows[1]["error"], {"type": "TimeoutError", "code": None})
+        self.assertEqual(rows[2]["returned_documents"], 3)
+
+    def test_failed_replay_skips_polling_and_configures_executor(self):
+        import os
+
+        params = {
+            "method": "apa",
+            "connection_timeout_ms": 1000,
+            "query_timeout_ms": 100,
+            "concurrency": 3,
+        }
+        api = Mock()
+        api.get.return_value = {"connectionStrings": {"standardSrv": "mongodb+srv://example.test"}}
+        executor_context = MagicMock()
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MONGODB_URI": "mongodb+srv://example.test",
+                    "ATLAS_PROJECT_ID": "test",
+                    "ATLAS_CLUSTER_NAME": "test",
+                    "ATLAS_PUBLIC_KEY": "test",
+                    "ATLAS_PRIVATE_KEY": "test",
+                },
+            ),
+            patch.object(recommend, "load_dotenv"),
+            patch.object(recommend.yanex, "is_standalone", return_value=False),
+            patch.object(recommend.yanex, "get_params", return_value=params),
+            patch.object(
+                recommend,
+                "load_workload",
+                return_value=(Mock(), {"namespace": "yelp.business"}, []),
+            ),
+            patch.object(recommend, "AtlasAPI", return_value=api),
+            patch.object(recommend, "MongoClient"),
+            patch.object(
+                recommend.MongoExecutor, "from_uri", return_value=executor_context
+            ) as connect,
+            patch.object(recommend, "replay", side_effect=RuntimeError("replay failed")),
+            patch.object(recommend, "poll_indexes") as poll,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "replay failed"):
+                recommend.main()
+        self.assertEqual(connect.call_args.kwargs["concurrency"], 3)
+        self.assertTrue(connect.call_args.kwargs["continue_on_error"])
+        executor_context.__exit__.assert_called_once()
+        api.session.close.assert_called_once()
+        poll.assert_not_called()
 
     def test_legacy_workloads_rejected_before_loading(self):
         dep = Mock(status="completed", script_path=Path("workload.py"))

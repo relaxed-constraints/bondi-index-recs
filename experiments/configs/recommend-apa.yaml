@@ -4,8 +4,10 @@ api_timeout_seconds: 30
 connection_timeout_ms: 10000
 query_timeout_ms: 360000
 batch_size: 1000
-slow_query_ms: 1
+slow_query_ms: 0
 workload_repetitions: 1
+# Number of concurrent replay queries; 1 preserves sequential execution.
+concurrency: 1
 # Expand the APA request window on each side of the replay.
 window_padding_seconds: 60
 initial_delay_seconds: 60

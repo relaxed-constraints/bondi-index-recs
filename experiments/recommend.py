@@ -1,7 +1,7 @@
 """Replay a saved BONDI workload and track Atlas recommendations with Yanex.
 
 The workload experiment is supplied as a Yanex dependency (-D). This script
-configures capture, replays queries sequentially, polls Performance Advisor (APA),
+configures capture, replays workloads with configurable concurrency, polls Performance Advisor (APA),
 and saves observations plus ranked index suggestions. It does not build the
 suggested indexes or evaluate their performance.
 """
@@ -97,12 +97,14 @@ def load_workload():
     if workload is None:
         raise ValueError("Workload artifact is missing")
     target = MongoCollectionRef(*manifest["namespace"].split(".", 1))
-    queries = [entry.query for entry in workload]
-    if not queries or len(queries) != manifest["query_count"]:
+    if not workload or len(workload) != manifest["query_count"]:
         raise ValueError("Workload query count does not match its manifest")
-    if any(not isinstance(q, MongoFindQuery) or q.target != target for q in queries):
+    if any(
+        not isinstance(entry.query, MongoFindQuery) or entry.query.target != target
+        for entry in workload
+    ):
         raise ValueError("Workload must contain MongoDB find queries for its manifest namespace")
-    return dep, manifest, queries
+    return dep, manifest, workload
 
 
 def ranked_indexes(response, namespace):
@@ -242,10 +244,10 @@ def prepare_indexes(coll, params):
     return indexes
 
 
-# --- Sequential replay and partial observations ---
+# --- Workload replay and execution observations ---
 
 
-def replay(client, manifest, queries, params, *, executor):
+def replay(client, manifest, workload, params, *, executor):
     """Replay through BONDI while PyMongo manages capture and dataset checks."""
     # Population equality catches obvious dataset mismatches, not content changes.
     database, collection = manifest["namespace"].split(".", 1)
@@ -260,34 +262,43 @@ def replay(client, manifest, queries, params, *, executor):
             # Verify profiling access/settings before any index deletion.
             indexes = prepare_indexes(coll, params)
             since = server_time_ms(client)
-            # Keep requests sequential to avoid introducing workload concurrency.
-            # BONDI consumes every cursor without retaining documents and raises
-            # on failure. Comments identify the run, repetition and query in logs.
+            # Results retain input order even with concurrent execution. Finish all
+            # repetitions before rejecting a replay with errors; never poll APA for it.
             for repetition in range(params["workload_repetitions"]):
-                for query_id, query in enumerate(queries):
-                    result = executor.run(
-                        query,
-                        query_kwargs={
-                            "max_time_ms": params["query_timeout_ms"],
-                            "batch_size": params["batch_size"],
-                            "comment": f"yanex:{yanex.get_experiment_id()}:{repetition}:{query_id}",
-                        },
-                    )
-                    # This is client-observed execution time, not server explain time.
+                results = executor.run_workload(
+                    workload,
+                    query_kwargs={
+                        "max_time_ms": params["query_timeout_ms"],
+                        "batch_size": params["batch_size"],
+                        "comment": f"yanex:{yanex.get_experiment_id()}:{repetition}",
+                    },
+                )
+                for query_id, (_, result) in enumerate(zip(workload, results, strict=True)):
+                    # Store structured error identity, not exception text that could
+                    # expose connection details. None means BONDI did not run an entry.
+                    error = result.error if result is not None else None
                     observations.append(
                         {
                             "repetition": repetition,
                             "query_id": query_id,
-                            "returned_documents": result.row_count,
-                            "seconds": result.elapsed_ms / 1000,
+                            "returned_documents": result.row_count if result is not None else None,
+                            "seconds": result.elapsed_ms / 1000 if result is not None else None,
+                            "status": result.status if result is not None else "not_run",
+                            "error": {
+                                "type": type(error).__name__,
+                                "code": getattr(error, "code", None),
+                            }
+                            if error is not None
+                            else None,
                         }
                     )
-                    if (query_id + 1) % 25 == 0 or query_id + 1 == len(queries):
-                        print(
-                            f"Replay {repetition + 1}: {query_id + 1}/{len(queries)} queries",
-                            flush=True,
-                        )
+                print(
+                    f"Replay {repetition + 1}: {len(results)}/{len(workload)} results", flush=True
+                )
             until = server_time_ms(client) + 1
+        failures = sum(row["status"] != "success" for row in observations)
+        if failures:
+            raise RuntimeError(f"Replay failed for {failures} queries; APA polling skipped")
         return {
             "since_ms": since,
             "until_ms": until,
@@ -299,8 +310,9 @@ def replay(client, manifest, queries, params, *, executor):
             "initial_indexes": json.loads(json_util.dumps(indexes)),
         }
     finally:
-        # Preserve successfully completed observations even if a later query fails.
-        # Yanex still marks that run failed; these rows do not imply full replay.
+        # Save every returned outcome, including failures, before propagating errors.
+        # An interrupted run_workload call cannot supply its partial results; earlier
+        # completed repetitions are still saved here.
         yanex.save_artifact(observations, "replay.jsonl")
 
 
@@ -378,7 +390,7 @@ def main():
     missing = [key for key in required if not os.environ.get(key)]
     if missing:
         raise ValueError("Missing environment variables: " + ", ".join(missing))
-    dep, manifest, queries = load_workload()
+    dep, manifest, workload = load_workload()
     api = AtlasAPI(params)
     try:
         # 2. Check API access and target identity before capture or index changes.
@@ -400,10 +412,13 @@ def main():
         with (
             MongoClient(os.environ["MONGODB_URI"], **client_options) as client,
             MongoExecutor.from_uri(
-                os.environ["MONGODB_URI"], client_kwargs=client_options
+                os.environ["MONGODB_URI"],
+                client_kwargs=client_options,
+                concurrency=params.get("concurrency", 1),
+                continue_on_error=True,
             ) as executor,
         ):
-            window = replay(client, manifest, queries, params, executor=executor)
+            window = replay(client, manifest, workload, params, executor=executor)
         # 4. Capture settings are restored before polling. Save the actual replay
         # window separately so delayed APA responses can be investigated later.
         yanex.save_artifact(window, "capture.json")

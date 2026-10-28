@@ -1,7 +1,7 @@
 # Full-collection selectivity verification is mandatory before export.
 database: citibike
 collection: rides2023
-uri: mongodb://127.0.0.1:27018/?serverSelectionTimeoutMS=5000
+uri: mongodb://127.0.0.1:27017/
 num_patterns: 20
 instances_per_pattern: 50
 min_selectivity: 1e-7

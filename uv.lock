@@ -39,14 +39,14 @@ wheels = [
 
 [[package]]
 name = "bondi"
-version = "0.1.2"
+version = "0.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pymongo" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/42/17/d91429da9ac3c38a0d2b4beea50aad7cdda99e529f51c68f153037d352d2/bondi-0.1.2.tar.gz", hash = "sha256:c58ac24827cebc966a93acc203e31f02b0c4dbf2e46f7dd1641f428af6ae317b", size = 142000 }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/d4/c6898f922f4a3e5630909dce0f9e449cf475f4b14e111d9325972004633a/bondi-0.1.3.tar.gz", hash = "sha256:3e72381ebbcb3252aa7da64775df60f7db0a592b80c687d6c8bd945cc3ce063f", size = 143587 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0d/50/d569760a0d8152c1149444a95e2aaa8e37d0b82cd3394929356c782e8c95/bondi-0.1.2-py3-none-any.whl", hash = "sha256:eaa9901dd02fd49e99f731843386aecb6b6b6f597d946d18b24273d75822adf3", size = 60887 },
+    { url = "https://files.pythonhosted.org/packages/80/50/9699f259d7d803496efed5ef701b6ed6003fba14819c8849c7e96ed561a5/bondi-0.1.3-py3-none-any.whl", hash = "sha256:a7c11a911c03c79932904caec3db3657de4b10b01fecfd5505a762562dc2830c", size = 61972 },
 ]
 
 [[package]]
@@ -70,7 +70,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bondi", specifier = "==0.1.2" },
+    { name = "bondi", specifier = "==0.1.3" },
     { name = "pymongo", specifier = ">=4.13,<5" },
     { name = "python-dotenv", specifier = ">=1,<2" },
     { name = "requests", specifier = ">=2.31,<3" },

@@ -1,7 +1,7 @@
 # Full-collection selectivity verification is mandatory before export.
 database: yelp
 collection: business
-uri: mongodb://127.0.0.1:27018/?serverSelectionTimeoutMS=5000
+uri: mongodb://127.0.0.1:27017/
 num_patterns: 10
 instances_per_pattern: 100
 min_selectivity: 1.0e-06

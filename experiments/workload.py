@@ -7,7 +7,6 @@ constraints, exact verification and experiment artifacts for recommendation runs
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
 from functools import partial
 from importlib.metadata import version
 from math import ceil, floor
@@ -234,7 +233,7 @@ def main():
             summary.append(
                 {
                     "pattern_id": pid,
-                    "pattern": asdict(patterns[pid]),
+                    "pattern": patterns[pid].to_dict(),
                     "query_ids": ids,
                     "queries": len(ids),
                     "unique_queries": len({canonical[i] for i in ids}),

@@ -209,6 +209,9 @@ class WorkloadExperimentTests(unittest.TestCase):
         summary = saved["pattern_summary.json"]
         self.assertEqual(summary[0]["query_ids"], [0])
         self.assertEqual(summary[0]["pattern_id"], 0)
+        restored_pattern = QueryPattern.from_dict(summary[0]["pattern"])
+        self.assertTrue(restored_pattern.matches(loaded[0].query))
+        self.assertIn("city $eq <str>", str(restored_pattern))
         self.assertEqual(
             set(copied) | set(saved),
             {"workload.jsonl", "workload_manifest.json", "pattern_summary.json"},
